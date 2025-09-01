@@ -84,18 +84,12 @@ class myPythonTranslation(TranslationContainer):
         try:
             # Agent sends base64 encoded data
             encrypted_data = inputMsg.Message
-            
-            # Extract UUID (first 36 bytes)
-            uuid_bytes = encrypted_data[:36]
-            remaining_data = encrypted_data[36:]
-            
-            # Check if this is unencrypted key exchange
+
+            # --- Key exchange handling (no UUID now) ---
             try:
-                uuid_str = uuid_bytes.decode('utf-8')
-                json_data = remaining_data.decode('utf-8')
+                json_data = encrypted_data.decode('utf-8')
                 parsed = json.loads(json_data)
                 
-                # If it's a key exchange, handle as unencrypted
                 if parsed.get('action') == 'key_exchange':
                     response.Message = parsed
                     return response
@@ -104,17 +98,16 @@ class myPythonTranslation(TranslationContainer):
                 # Not unencrypted JSON, proceed with decryption
                 pass
             
-            # Normal encrypted message handling
-            # Minimum length check: UUID(36) + IV(16) + HMAC(32) = 84 bytes minimum
-            if len(encrypted_data) < 84:
+            # --- Normal encrypted message handling ---
+            # Minimum length check: IV(16) + HMAC(32) = 48 bytes minimum
+            if len(encrypted_data) < 48:
                 response.Success = False
                 response.Error = "Message too short for encrypted format"
                 return response
             
-            # Extract components: UUID (36 bytes) + IV (16 bytes) + Ciphertext + HMAC (32 bytes)
-            uuid = encrypted_data[:36]
-            iv = encrypted_data[36:52]
-            ciphertext = encrypted_data[52:-32]
+            # Extract components: IV (16 bytes) + Ciphertext + HMAC (32 bytes)
+            iv = encrypted_data[:16]
+            ciphertext = encrypted_data[16:-32]
             received_tag = encrypted_data[-32:]
             
             # Verify HMAC
