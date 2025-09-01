@@ -13,6 +13,11 @@ class myPythonTranslation(TranslationContainer):
     description = "python translation service with proper key generation and encryption handling"
     author = "@med"
 
+    def __init__(self):
+        super().__init__()
+        # Store agent keys for each UUID
+        self.agent_keys = {}
+
     async def generate_keys(self, inputMsg: TrGenerateEncryptionKeysMessage):
         response = TrGenerateEncryptionKeysMessageResponse(Success=True)
         
@@ -20,16 +25,22 @@ class myPythonTranslation(TranslationContainer):
         agent_to_server_key = os.urandom(32)  # Agent encrypts with this
         server_to_agent_key = os.urandom(32)  # Agent decrypts with this
         
+        # Store keys for this payload UUID
+        payload_uuid = inputMsg.TranslationContainerPayloadUUID
+        self.agent_keys[payload_uuid] = {
+            'agent_to_server': agent_to_server_key,
+            'server_to_agent': server_to_agent_key
+        }
+        
         # Convert to base64 (bytes, not str)
         agent_encrypt_key_b64 = base64.b64encode(agent_to_server_key)
         agent_decrypt_key_b64 = base64.b64encode(server_to_agent_key)
         
         # From translator perspective:
-        response.DecryptionKey = agent_encrypt_key_b64
-        response.EncryptionKey = agent_decrypt_key_b64
+        response.DecryptionKey = agent_encrypt_key_b64  # Agent encrypts with this
+        response.EncryptionKey = agent_decrypt_key_b64  # Agent decrypts with this
         
         return response
-
 
     async def translate_to_c2_format(self, inputMsg: TrMythicC2ToCustomMessageFormatMessage):
         """
@@ -85,13 +96,49 @@ class myPythonTranslation(TranslationContainer):
             # Agent sends base64 encoded data
             encrypted_data = inputMsg.Message
 
-            # --- Key exchange handling (no UUID now) ---
+            # --- Key exchange handling ---
             try:
-                json_data = encrypted_data.decode('utf-8')
-                parsed = json.loads(json_data)
+                # Try to decode as base64 first
+                try:
+                    decoded_data = base64.b64decode(encrypted_data)
+                    json_string = decoded_data.decode('utf-8')
+                except:
+                    # If base64 decode fails, try direct decode
+                    json_string = encrypted_data.decode('utf-8')
+                
+                parsed = json.loads(json_string)
                 
                 if parsed.get('action') == 'key_exchange':
-                    response.Message = parsed
+                    uuid = parsed.get('uuid')
+                    print(f"[TRANSLATOR DEBUG] Key exchange request for UUID: {uuid}")
+                    
+                    # Get or generate keys for this agent
+                    if uuid in self.agent_keys:
+                        agent_keys = self.agent_keys[uuid]
+                        print(f"[TRANSLATOR DEBUG] Using existing keys for {uuid}")
+                    else:
+                        # Generate new keys for this agent
+                        agent_to_server_key = os.urandom(32)
+                        server_to_agent_key = os.urandom(32)
+                        
+                        self.agent_keys[uuid] = {
+                            'agent_to_server': agent_to_server_key,
+                            'server_to_agent': server_to_agent_key
+                        }
+                        agent_keys = self.agent_keys[uuid]
+                        print(f"[TRANSLATOR DEBUG] Generated new keys for {uuid}")
+                    
+                    # Return key exchange response
+                    key_response = {
+                        "action": "key_exchange_response",
+                        "uuid": uuid,
+                        "encryption_key": base64.b64encode(agent_keys['agent_to_server']).decode(),
+                        "decryption_key": base64.b64encode(agent_keys['server_to_agent']).decode(),
+                        "status": "success"
+                    }
+                    
+                    response.Message = key_response
+                    print(f"[TRANSLATOR DEBUG] Returning key exchange response: {key_response}")
                     return response
                     
             except (UnicodeDecodeError, json.JSONDecodeError):
@@ -99,6 +146,10 @@ class myPythonTranslation(TranslationContainer):
                 pass
             
             # --- Normal encrypted message handling ---
+            # For encrypted messages, expect raw bytes (not base64)
+            if isinstance(encrypted_data, str):
+                encrypted_data = encrypted_data.encode()
+            
             # Minimum length check: IV(16) + HMAC(32) = 48 bytes minimum
             if len(encrypted_data) < 48:
                 response.Success = False
