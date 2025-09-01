@@ -8,9 +8,9 @@ from mythic_container.TranslationBase import *
 
 
 class myPythonTranslation(TranslationContainer):
-    # name = "myPythonTranslation"
-    # description = "python translation service that doesn't change anything"
-    # author = "@med"
+    name = "myPythonTranslation"
+    description = "python translation service that doesn't change anything"
+    uthor = "@med"
 
     async def generate_keys(self, inputMsg: TrGenerateEncryptionKeysMessage):
         response = TrGenerateEncryptionKeysMessageResponse(Success=True)
