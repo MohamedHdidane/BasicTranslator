@@ -83,7 +83,7 @@ class myPythonTranslation(TranslationContainer):
         
         try:
             # Agent sends base64 encoded data
-            encrypted_data = base64.b64decode(inputMsg.Message)
+            encrypted_data = inputMsg.Message
             
             # Extract UUID (first 36 bytes)
             uuid_bytes = encrypted_data[:36]
