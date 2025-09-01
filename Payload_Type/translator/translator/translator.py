@@ -20,17 +20,16 @@ class myPythonTranslation(TranslationContainer):
         agent_to_server_key = os.urandom(32)  # Agent encrypts with this
         server_to_agent_key = os.urandom(32)  # Agent decrypts with this
         
-        # Convert to base64 for storage/transmission
-        agent_encrypt_key_b64 = base64.b64encode(agent_to_server_key).decode()
-        agent_decrypt_key_b64 = base64.b64encode(server_to_agent_key).decode()
+        # Convert to base64 (bytes, not str)
+        agent_encrypt_key_b64 = base64.b64encode(agent_to_server_key)
+        agent_decrypt_key_b64 = base64.b64encode(server_to_agent_key)
         
         # From translator perspective:
-        # DecryptionKey = decrypt messages FROM agent (agent's encryption key)
-        # EncryptionKey = encrypt messages TO agent (agent's decryption key)
         response.DecryptionKey = agent_encrypt_key_b64
         response.EncryptionKey = agent_decrypt_key_b64
         
         return response
+
 
     async def translate_to_c2_format(self, inputMsg: TrMythicC2ToCustomMessageFormatMessage):
         """
