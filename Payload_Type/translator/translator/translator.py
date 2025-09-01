@@ -85,6 +85,32 @@ class myPythonTranslation(TranslationContainer):
             # Agent sends base64 encoded data
             encrypted_data = base64.b64decode(inputMsg.Message)
             
+            # Extract UUID (first 36 bytes)
+            uuid_bytes = encrypted_data[:36]
+            remaining_data = encrypted_data[36:]
+            
+            # Check if this is unencrypted key exchange
+            try:
+                uuid_str = uuid_bytes.decode('utf-8')
+                json_data = remaining_data.decode('utf-8')
+                parsed = json.loads(json_data)
+                
+                # If it's a key exchange, handle as unencrypted
+                if parsed.get('action') == 'key_exchange':
+                    response.Message = parsed
+                    return response
+                    
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                # Not unencrypted JSON, proceed with decryption
+                pass
+            
+            # Normal encrypted message handling
+            # Minimum length check: UUID(36) + IV(16) + HMAC(32) = 84 bytes minimum
+            if len(encrypted_data) < 84:
+                response.Success = False
+                response.Error = "Message too short for encrypted format"
+                return response
+            
             # Extract components: UUID (36 bytes) + IV (16 bytes) + Ciphertext + HMAC (32 bytes)
             uuid = encrypted_data[:36]
             iv = encrypted_data[36:52]
@@ -99,7 +125,7 @@ class myPythonTranslation(TranslationContainer):
             h.update(iv + ciphertext)
             calculated_tag = h.finalize()
             
-            if calculated_tag != received_tag:
+            if not hmac.compare_digest(calculated_tag, received_tag):
                 response.Success = False
                 response.Error = "HMAC verification failed"
                 return response
