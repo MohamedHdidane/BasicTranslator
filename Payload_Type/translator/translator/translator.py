@@ -16,15 +16,19 @@ class myPythonTranslation(TranslationContainer):
     async def generate_keys(self, inputMsg: TrGenerateEncryptionKeysMessage):
         response = TrGenerateEncryptionKeysMessageResponse(Success=True)
         
-        # Generate AES key (32 bytes for AES-256)
-        aes_key = os.urandom(32)
+        # Generate separate keys for each direction
+        agent_to_server_key = os.urandom(32)  # Agent encrypts with this
+        server_to_agent_key = os.urandom(32)  # Agent decrypts with this
         
-        # Agent expects base64 encoded keys in this format
-        key_b64 = base64.b64encode(aes_key).decode()
+        # Convert to base64 for storage/transmission
+        agent_encrypt_key_b64 = base64.b64encode(agent_to_server_key).decode()
+        agent_decrypt_key_b64 = base64.b64encode(server_to_agent_key).decode()
         
-        # Return keys in the format the agent expects
-        response.DecryptionKey = key_b64
-        response.EncryptionKey = key_b64
+        # From translator perspective:
+        # DecryptionKey = decrypt messages FROM agent (agent's encryption key)
+        # EncryptionKey = encrypt messages TO agent (agent's decryption key)
+        response.DecryptionKey = agent_encrypt_key_b64
+        response.EncryptionKey = agent_decrypt_key_b64
         
         return response
 
