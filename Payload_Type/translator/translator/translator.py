@@ -6,7 +6,7 @@ from Crypto.Random import get_random_bytes
 from Crypto.Util.Padding import pad, unpad
 import hashlib
 
-class IgiderTranslation(TranslationContainer):
+class myPythonTranslation(TranslationContainer):
     name = "igider_translator"
     description = "Igider translation service with custom encryption"
     author = "@med"
