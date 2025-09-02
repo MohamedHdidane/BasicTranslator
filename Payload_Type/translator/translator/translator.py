@@ -68,31 +68,31 @@ class myPythonTranslation(TranslationContainer):
             # Decode base64 message from agent
             decoded_message = base64.b64decode(inputMsg.Message)
             
-            # Handle key exchange request (unencrypted)
-            try:
-                # Try to parse as JSON first (key exchange is unencrypted)
-                json_str = decoded_message.decode()
-                # Remove UUID prefix if present
-                if len(json_str) > 36:
-                    json_str = json_str[36:]  # Remove UUID
-                parsed_message = json.loads(json_str)
+            # Extract UUID (first part) and remaining data
+            decoded_str = decoded_message.decode()
+            
+            # Look for UUID pattern (36 chars) at start
+            if len(decoded_str) >= 36:
+                potential_uuid = decoded_str[:36]
+                remaining_data = decoded_str[36:]
                 
-                # Check if this is a key exchange request
-                if parsed_message.get("action") == "key_exchange":
-                    response.Message = parsed_message
-                    return response
-            except:
-                pass  # Not a key exchange, continue with encrypted flow
+                # Try to parse remaining data as JSON (for key exchange)
+                try:
+                    parsed_json = json.loads(remaining_data)
+                    
+                    # If this is a key exchange, return it directly (unencrypted)
+                    if parsed_json.get("action") == "key_exchange":
+                        response.Message = parsed_json
+                        return response
+                except json.JSONDecodeError:
+                    pass  # Not JSON, must be encrypted data
             
-            # Extract UUID and encrypted data for normal messages
-            if len(decoded_message) < 36:
-                raise ValueError("Message too short to contain UUID")
-            
-            # Find UUID boundary - look for standard UUID format
-            uuid_bytes = decoded_message[:36]
-            encrypted_data = decoded_message[36:]
-            
+            # Handle encrypted messages (normal communication after key exchange)
             if inputMsg.CryptoKeys and len(inputMsg.CryptoKeys) > 0:
+                # Extract UUID and encrypted data as bytes
+                uuid_bytes = decoded_message[:36]  # UUID as bytes
+                encrypted_data = decoded_message[36:]  # Rest is encrypted
+                
                 # Use the agent-to-server key for decryption
                 decryption_key = base64.b64decode(inputMsg.CryptoKeys[0])
                 decrypted_data = self._decrypt_data(encrypted_data, decryption_key)
@@ -100,8 +100,11 @@ class myPythonTranslation(TranslationContainer):
                     raise ValueError("Decryption failed")
                 json_message = decrypted_data.decode()
             else:
-                # No encryption, just decode
-                json_message = encrypted_data.decode()
+                # No encryption keys available, treat as unencrypted
+                if len(decoded_message) >= 36:
+                    json_message = decoded_message[36:].decode()
+                else:
+                    json_message = decoded_message.decode()
             
             # Parse JSON and return to Mythic
             response.Message = json.loads(json_message)
