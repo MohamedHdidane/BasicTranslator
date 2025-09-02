@@ -93,25 +93,19 @@ class myPythonTranslation(TranslationContainer):
         response = TrCustomMessageToMythicC2FormatMessageResponse(Success=True)
         
         try:
-            print(f"[TRANSLATOR DEBUG] Raw input message: {inputMsg.Message}")
-            print(f"[TRANSLATOR DEBUG] Message type: {type(inputMsg.Message)}")
-            
-            # Agent sends data - could be base64 string or bytes
+            # Agent sends base64 encoded data
             encrypted_data = inputMsg.Message
-            
-            # Convert to bytes if it's a string
-            if isinstance(encrypted_data, str):
-                try:
-                    # Try base64 decode first
-                    encrypted_data = base64.b64decode(encrypted_data)
-                except:
-                    # If that fails, encode to bytes
-                    encrypted_data = encrypted_data.encode()
 
             # --- Key exchange handling ---
             try:
-                # Try to decode as UTF-8 JSON (for key exchange)
-                json_string = encrypted_data.decode('utf-8')
+                # Try to decode as base64 first
+                try:
+                    decoded_data = base64.b64decode(encrypted_data)
+                    json_string = decoded_data.decode('utf-8')
+                except:
+                    # If base64 decode fails, try direct decode
+                    json_string = encrypted_data.decode('utf-8')
+                
                 parsed = json.loads(json_string)
                 
                 if parsed.get('action') == 'key_exchange':
@@ -147,8 +141,7 @@ class myPythonTranslation(TranslationContainer):
                     print(f"[TRANSLATOR DEBUG] Returning key exchange response: {key_response}")
                     return response
                     
-            except (UnicodeDecodeError, json.JSONDecodeError) as e:
-                print(f"[TRANSLATOR DEBUG] Not JSON key exchange, proceeding with decryption: {e}")
+            except (UnicodeDecodeError, json.JSONDecodeError):
                 # Not unencrypted JSON, proceed with decryption
                 pass
             
