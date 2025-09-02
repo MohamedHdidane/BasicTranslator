@@ -5,6 +5,15 @@ from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.primitives import hashes, hmac, padding
 from cryptography.hazmat.backends import default_backend
 from mythic_container.TranslationBase import *
+import logging
+
+# Configure logging for debugging
+logging.basicConfig(
+    level=logging.DEBUG,
+    format='%(asctime)s [%(levelname)s] %(message)s',
+    handlers=[logging.StreamHandler()]
+)
+logger = logging.getLogger(__name__)
 
 class MyPythonTranslation(TranslationContainer):
     name = "myPythonTranslation"
@@ -15,16 +24,20 @@ class MyPythonTranslation(TranslationContainer):
         super().__init__()
         # Dictionary to store agent keys for each UUID
         self.agent_keys = {}
+        logger.debug("Initialized MyPythonTranslation container")
 
     async def generate_keys(self, inputMsg: TrGenerateEncryptionKeysMessage) -> TrGenerateEncryptionKeysMessageResponse:
         response = TrGenerateEncryptionKeysMessageResponse(Success=True)
         try:
+            # Use PayloadUUID instead of TranslationContainerPayloadUUID
+            payload_uuid = inputMsg.PayloadUUID
+            logger.debug(f"Generating keys for PayloadUUID: {payload_uuid}")
+
             # Generate 32-byte keys for AES-256
             agent_to_server_key = os.urandom(32)  # Agent encrypts with this
             server_to_agent_key = os.urandom(32)  # Agent decrypts with this
 
             # Store keys for this payload UUID
-            payload_uuid = inputMsg.TranslationContainerPayloadUUID
             self.agent_keys[payload_uuid] = {
                 'agent_to_server': agent_to_server_key,
                 'server_to_agent': server_to_agent_key
@@ -33,10 +46,15 @@ class MyPythonTranslation(TranslationContainer):
             # Return base64-encoded keys for Mythic
             response.EncryptionKey = base64.b64encode(server_to_agent_key)
             response.DecryptionKey = base64.b64encode(agent_to_server_key)
-            print(f"[DEBUG] Generated keys for UUID {payload_uuid}")
+            logger.info(f"Generated keys for UUID {payload_uuid}: enc_key={response.EncryptionKey[:10].decode()}..., dec_key={response.DecryptionKey[:10].decode()}...")
+        except AttributeError as e:
+            response.Success = False
+            response.Error = f"Invalid input message structure: {str(e)}"
+            logger.error(f"Key generation failed: {str(e)}")
         except Exception as e:
             response.Success = False
             response.Error = f"Key generation failed: {str(e)}"
+            logger.error(f"Key generation failed: {str(e)}")
         return response
 
     async def translate_to_c2_format(self, inputMsg: TrMythicC2ToCustomMessageFormatMessage) -> TrMythicC2ToCustomMessageFormatMessageResponse:
@@ -47,6 +65,8 @@ class MyPythonTranslation(TranslationContainer):
         try:
             # Serialize Mythic's JSON message
             plaintext = json.dumps(inputMsg.Message).encode()
+            payload_uuid = inputMsg.PayloadUUID
+            logger.debug(f"Translating to C2 format for UUID {payload_uuid}")
 
             # Get encryption key
             key = base64.b64decode(inputMsg.EncryptionKey)
@@ -66,13 +86,14 @@ class MyPythonTranslation(TranslationContainer):
             tag = h.finalize()
 
             # Format: UUID + IV + Ciphertext + HMAC, then base64 encode
-            uuid = inputMsg.TranslationContainerPayloadUUID.encode()
+            uuid = payload_uuid.encode()
             encrypted_message = uuid + iv + ciphertext + tag
             response.Message = base64.b64encode(encrypted_message)
-            print(f"[DEBUG] Encrypted message for UUID {inputMsg.TranslationContainerPayloadUUID}")
+            logger.debug(f"Encrypted message for UUID {payload_uuid}, length={len(response.Message)}")
         except Exception as e:
             response.Success = False
             response.Error = f"Encryption failed: {str(e)}"
+            logger.error(f"Encryption failed for UUID {payload_uuid}: {str(e)}")
         return response
 
     async def translate_from_c2_format(self, inputMsg: TrCustomMessageToMythicC2FormatMessage) -> TrCustomMessageToMythicC2FormatMessageResponse:
@@ -85,6 +106,7 @@ class MyPythonTranslation(TranslationContainer):
             data = inputMsg.Message
             if isinstance(data, bytes):
                 data = data.decode('utf-8')
+            logger.debug(f"Processing message from agent, data length={len(data)}")
 
             # Check for key exchange
             try:
@@ -94,7 +116,7 @@ class MyPythonTranslation(TranslationContainer):
 
                 if parsed.get('action') == 'key_exchange':
                     uuid = parsed.get('uuid')
-                    print(f"[DEBUG] Key exchange request for UUID: {uuid}")
+                    logger.info(f"Key exchange request for UUID: {uuid}")
 
                     # Generate or retrieve keys
                     if uuid not in self.agent_keys:
@@ -102,7 +124,9 @@ class MyPythonTranslation(TranslationContainer):
                             'agent_to_server': os.urandom(32),
                             'server_to_agent': os.urandom(32)
                         }
-                        print(f"[DEBUG] Generated new keys for UUID {uuid}")
+                        logger.info(f"Generated new keys for UUID {uuid}")
+                    else:
+                        logger.debug(f"Using existing keys for UUID {uuid}")
 
                     agent_keys = self.agent_keys[uuid]
                     key_response = {
@@ -113,17 +137,18 @@ class MyPythonTranslation(TranslationContainer):
                         "status": "success"
                     }
                     response.Message = key_response
-                    print(f"[DEBUG] Key exchange response: {key_response}")
+                    logger.info(f"Key exchange response sent: {key_response}")
                     return response
             except (base64.binascii.Error, UnicodeDecodeError, json.JSONDecodeError):
                 # Not a key exchange, proceed with decryption
-                pass
+                logger.debug("Message is not a key exchange, attempting decryption")
 
             # Handle encrypted message
             encrypted_data = base64.b64decode(data)
             if len(encrypted_data) < 84:  # UUID(36) + IV(16) + Ciphertext(min 16) + HMAC(32)
                 response.Success = False
                 response.Error = "Message too short for encrypted format"
+                logger.error(f"Message too short: {len(encrypted_data)} bytes")
                 return response
 
             # Extract components
@@ -142,6 +167,7 @@ class MyPythonTranslation(TranslationContainer):
             if not hmac.compare_digest(calculated_tag, received_tag):
                 response.Success = False
                 response.Error = "HMAC verification failed"
+                logger.error(f"HMAC verification failed for UUID {uuid}")
                 return response
 
             # Decrypt
@@ -153,8 +179,9 @@ class MyPythonTranslation(TranslationContainer):
 
             # Parse JSON
             response.Message = json.loads(plaintext.decode())
-            print(f"[DEBUG] Decrypted message from UUID {uuid}")
+            logger.debug(f"Decrypted message from UUID {uuid}, plaintext length={len(plaintext)}")
         except Exception as e:
             response.Success = False
             response.Error = f"Decryption failed: {str(e)}"
+            logger.error(f"Decryption failed: {str(e)}")
         return response
