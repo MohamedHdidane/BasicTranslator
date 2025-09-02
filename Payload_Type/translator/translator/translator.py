@@ -29,9 +29,15 @@ class MyPythonTranslation(TranslationContainer):
     async def generate_keys(self, inputMsg: TrGenerateEncryptionKeysMessage) -> TrGenerateEncryptionKeysMessageResponse:
         response = TrGenerateEncryptionKeysMessageResponse(Success=True)
         try:
-            # Use PayloadUUID instead of TranslationContainerPayloadUUID
-            payload_uuid = inputMsg.PayloadUUID
-            logger.debug(f"Generating keys for PayloadUUID: {payload_uuid}")
+            # Log the input message structure for debugging
+            msg_attrs = vars(inputMsg)
+            logger.debug(f"Input message structure: {msg_attrs}")
+
+            # Use UUID instead of PayloadUUID
+            payload_uuid = getattr(inputMsg, 'UUID', None)
+            if not payload_uuid:
+                raise AttributeError("No UUID attribute found in TrGenerateEncryptionKeysMessage")
+            logger.debug(f"Generating keys for UUID: {payload_uuid}")
 
             # Generate 32-byte keys for AES-256
             agent_to_server_key = os.urandom(32)  # Agent encrypts with this
@@ -65,7 +71,9 @@ class MyPythonTranslation(TranslationContainer):
         try:
             # Serialize Mythic's JSON message
             plaintext = json.dumps(inputMsg.Message).encode()
-            payload_uuid = inputMsg.PayloadUUID
+            payload_uuid = getattr(inputMsg, 'UUID', None) or getattr(inputMsg, 'PayloadUUID', None)
+            if not payload_uuid:
+                raise AttributeError("No UUID or PayloadUUID found in TrMythicC2ToCustomMessageFormatMessage")
             logger.debug(f"Translating to C2 format for UUID {payload_uuid}")
 
             # Get encryption key
@@ -93,7 +101,7 @@ class MyPythonTranslation(TranslationContainer):
         except Exception as e:
             response.Success = False
             response.Error = f"Encryption failed: {str(e)}"
-            logger.error(f"Encryption failed for UUID {payload_uuid}: {str(e)}")
+            logger.error(f"Encryption failed for UUID {payload_uuid if 'payload_uuid' in locals() else 'unknown'}: {str(e)}")
         return response
 
     async def translate_from_c2_format(self, inputMsg: TrCustomMessageToMythicC2FormatMessage) -> TrCustomMessageToMythicC2FormatMessageResponse:
