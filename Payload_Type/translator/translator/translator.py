@@ -14,156 +14,180 @@ class myPythonTranslation(TranslationContainer):
     # Store keys per agent UUID
     agent_keys = {}
     
-    async def generate_keys(self, inputMsg: TrGenerateEncryptionKeysMessage) -> TrGenerateEncryptionKeysMessageResponse:
-        response = TrGenerateEncryptionKeysMessageResponse(Success=True)
+    async def generate_keys(
+        request: TranslateGenerateKeysMessage
+    ) -> TranslateGenerateKeysMessageResponse:
+        """
+        Generate encryption keys for the payload
         
+        Args:
+            request: TranslateGenerateKeysMessage containing payload UUID and other info
+            
+        Returns:
+            TranslateGenerateKeysMessageResponse with generated keys as byte arrays
+        """
         try:
-            # Generate 32-byte AES key
-            encryption_key = get_random_bytes(32)
+            # Generate a 32-byte AES-256 key
+            encryption_key = os.urandom(32)
             
-            # Store keys for this agent using PayloadUUID only
-            # Note: C2ProfileName is not available in generate_keys message
-            agent_id = str(inputMsg.PayloadUUID)
-            self.agent_keys[agent_id] = {
-                "enc_key": encryption_key,
-                "dec_key": encryption_key  # Same key for AES
-            }
+            # Generate a 32-byte HMAC key for message integrity
+            hmac_key = os.urandom(32)
             
-            response.EncryptionKey = encryption_key
-            response.DecryptionKey = encryption_key
+            # You can also generate other keys based on your encryption scheme
+            # For example, IV for AES if needed
+            iv = os.urandom(16)
             
-            print(f"Generated keys for agent: {agent_id}")
+            # Combine keys if needed (this is just an example)
+            # In practice, you might want to keep them separate
+            combined_key = encryption_key + hmac_key + iv
+            
+            # Return the keys as byte arrays (Mythic 3.0+ expects byte arrays, not base64)
+            response = TranslateGenerateKeysMessageResponse(
+                success=True,
+                enc_key=encryption_key,  # Encryption key as bytes
+                dec_key=encryption_key,  # Decryption key (same as enc for symmetric)
+                # You can add additional keys to the 'value' field if needed
+                value=combined_key.hex()  # Optional: additional key data as hex string
+            )
+            
+            return response
             
         except Exception as e:
-            response.Success = False
-            response.Error = str(e)
-            print(f"Error generating keys: {str(e)}")
-            
-        return response
+            return TranslateGenerateKeysMessageResponse(
+                success=False,
+                error=f"Failed to generate keys: {str(e)}"
+            )
 
-    async def translate_to_c2_format(self, inputMsg: TrMythicC2ToCustomMessageFormatMessage) -> TrMythicC2ToCustomMessageFormatMessageResponse:
-        response = TrMythicC2ToCustomMessageFormatMessageResponse(Success=True)
-        
-        try:
-            # Use PayloadUUID to find keys (C2ProfileName is available here)
-            agent_id = str(inputMsg.PayloadUUID)
-            
-            if agent_id not in self.agent_keys:
-                # Try with C2ProfileName prefix if simple UUID lookup fails
-                agent_id_with_profile = inputMsg.C2ProfileName + "_" + str(inputMsg.PayloadUUID)
-                if agent_id_with_profile not in self.agent_keys:
-                    response.Success = False
-                    response.Error = f"No encryption keys found for agent {agent_id}"
-                    print(f"Available agent keys: {list(self.agent_keys.keys())}")
-                    return response
-                else:
-                    agent_id = agent_id_with_profile
-                    
-            keys = self.agent_keys[agent_id]
-            
-            # Check if Mythic is handling encryption
-            if inputMsg.MythicEncrypts:
-                # Mythic will encrypt our output, so just convert to bytes
-                response.Message = json.dumps(inputMsg.Message).encode()
-            else:
-                # We need to encrypt the message ourselves
-                json_data = json.dumps(inputMsg.Message).encode()
-                
-                # AES encryption
-                cipher = AES.new(keys["enc_key"], AES.MODE_CBC)
-                padded_data = pad(json_data, AES.block_size)
-                encrypted_data = cipher.encrypt(padded_data)
-                
-                # Create custom message format that agent expects
-                custom_message = str(inputMsg.PayloadUUID) + base64.b64encode(cipher.iv + encrypted_data).decode()
-                response.Message = custom_message.encode()
-            
-            print(f"Translated message to C2 format for agent: {agent_id}")
-            
-        except Exception as e:
-            response.Success = False
-            response.Error = str(e)
-            print(f"Error translating to C2 format: {str(e)}")
-            
-        return response
 
-    async def translate_from_c2_format(self, inputMsg: TrCustomMessageToMythicC2FormatMessage) -> TrCustomMessageToMythicC2FormatMessageResponse:
-        response = TrCustomMessageToMythicC2FormatMessageResponse(Success=True)
+    async def translate_to_c2_format(
+        request: TranslateToC2FormatMessage
+    ) -> TranslateToC2FormatMessageResponse:
+        """
+        Translate message from Mythic format to C2 format (encrypt outgoing messages)
         
+        Args:
+            request: TranslateToC2FormatMessage with message to encrypt
+            
+        Returns:
+            TranslateToC2FormatMessageResponse with encrypted message
+        """
         try:
-            # Parse incoming message from agent
-            message_str = inputMsg.Message.decode() if isinstance(inputMsg.Message, bytes) else inputMsg.Message
+            # Get the message and encryption key
+            message = request.message
+            enc_key = request.enc_key[:32]  # Use first 32 bytes for AES-256
+            hmac_key = request.enc_key[32:64]  # Next 32 bytes for HMAC
             
-            # Agent sends: UUID + base64(encrypted_data)
-            # Extract UUID (first 36 characters typically)
-            agent_uuid = None
-            encrypted_part = None
-            
-            # Try to extract UUID from the message
-            if len(message_str) > 36:
-                potential_uuid = message_str[:36]
-                encrypted_part = message_str[36:]
-                agent_uuid = potential_uuid
+            # Convert message to bytes if it's a string
+            if isinstance(message, str):
+                message_bytes = message.encode('utf-8')
             else:
-                # Fallback: try to decode as base64 JSON
-                try:
-                    decoded_json = json.loads(base64.b64decode(message_str).decode())
-                    agent_uuid = decoded_json.get("uuid")
-                    encrypted_part = decoded_json.get("data")
-                except:
-                    pass
+                message_bytes = message
             
-            if not agent_uuid:
-                response.Success = False
-                response.Error = "Could not extract agent UUID from message"
-                return response
-                
-            # Find agent keys
-            agent_id = agent_uuid
-            if agent_id not in self.agent_keys:
-                # Try with C2ProfileName prefix
-                agent_id_with_profile = inputMsg.C2ProfileName + "_" + agent_uuid
-                if agent_id_with_profile in self.agent_keys:
-                    agent_id = agent_id_with_profile
-                else:
-                    response.Success = False
-                    response.Error = f"No decryption keys found for agent {agent_uuid}"
-                    print(f"Available agent keys: {list(self.agent_keys.keys())}")
-                    return response
-                    
-            keys = self.agent_keys[agent_id]
+            # Generate a random IV for this message
+            iv = os.urandom(16)
             
-            # Check if Mythic handled decryption
-            if inputMsg.MythicEncrypts:
-                # Mythic already decrypted, just parse JSON
-                mythic_message = json.loads(inputMsg.Message.decode())
-            else:
-                # We need to decrypt the message ourselves
-                try:
-                    # Decode base64 encrypted data
-                    encrypted_data = base64.b64decode(encrypted_part)
-                    
-                    # Extract IV (first 16 bytes) and ciphertext
-                    iv = encrypted_data[:16]
-                    ciphertext = encrypted_data[16:]
-                    
-                    # Decrypt
-                    cipher = AES.new(keys["dec_key"], AES.MODE_CBC, iv)
-                    decrypted_data = unpad(cipher.decrypt(ciphertext), AES.block_size)
-                    
-                    mythic_message = json.loads(decrypted_data.decode())
-                    
-                except Exception as e:
-                    response.Success = False
-                    response.Error = f"Decryption failed: {str(e)}"
-                    return response
+            # Encrypt the message using AES-256-CBC
+            cipher = Cipher(
+                algorithms.AES(enc_key), 
+                modes.CBC(iv), 
+                backend=default_backend()
+            )
+            encryptor = cipher.encryptor()
             
-            response.Message = mythic_message
-            print(f"Translated message from C2 format for agent: {agent_id}")
+            # Pad the message to AES block size (16 bytes)
+            padding_length = 16 - (len(message_bytes) % 16)
+            padded_message = message_bytes + bytes([padding_length]) * padding_length
+            
+            # Encrypt the padded message
+            encrypted_message = encryptor.update(padded_message) + encryptor.finalize()
+            
+            # Create HMAC for integrity checking
+            h = hmac.HMAC(hmac_key, hashes.SHA256(), backend=default_backend())
+            h.update(iv + encrypted_message)
+            message_hmac = h.finalize()
+            
+            # Combine IV + encrypted message + HMAC
+            final_message = iv + encrypted_message + message_hmac
+            
+            return TranslateToC2FormatMessageResponse(
+                success=True,
+                message=final_message
+            )
             
         except Exception as e:
-            response.Success = False
-            response.Error = str(e)
-            print(f"Error translating from C2 format: {str(e)}")
+            return TranslateToC2FormatMessageResponse(
+                success=False,
+                error=f"Failed to encrypt message: {str(e)}"
+            )
+
+
+    async def translate_from_c2_format(
+        request: TranslateFromC2FormatMessage
+    ) -> TranslateFromC2FormatMessageResponse:
+        """
+        Translate message from C2 format to Mythic format (decrypt incoming messages)
+        
+        Args:
+            request: TranslateFromC2FormatMessage with encrypted message
             
-        return response
+        Returns:
+            TranslateFromC2FormatMessageResponse with decrypted message
+        """
+        try:
+            # Get the encrypted message and decryption key
+            encrypted_message = request.message
+            dec_key = request.dec_key[:32]  # Use first 32 bytes for AES-256
+            hmac_key = request.dec_key[32:64]  # Next 32 bytes for HMAC
+            
+            # Extract IV (first 16 bytes)
+            iv = encrypted_message[:16]
+            
+            # Extract HMAC (last 32 bytes)
+            received_hmac = encrypted_message[-32:]
+            
+            # Extract encrypted data (middle portion)
+            encrypted_data = encrypted_message[16:-32]
+            
+            # Verify HMAC for integrity
+            h = hmac.HMAC(hmac_key, hashes.SHA256(), backend=default_backend())
+            h.update(iv + encrypted_data)
+            try:
+                h.verify(received_hmac)
+            except Exception:
+                return TranslateFromC2FormatMessageResponse(
+                    success=False,
+                    error="HMAC verification failed - message may be corrupted or tampered with"
+                )
+            
+            # Decrypt the message using AES-256-CBC
+            cipher = Cipher(
+                algorithms.AES(dec_key), 
+                modes.CBC(iv), 
+                backend=default_backend()
+            )
+            decryptor = cipher.decryptor()
+            
+            # Decrypt and remove padding
+            decrypted_padded = decryptor.update(encrypted_data) + decryptor.finalize()
+            
+            # Remove PKCS7 padding
+            padding_length = decrypted_padded[-1]
+            decrypted_message = decrypted_padded[:-padding_length]
+            
+            # Convert back to string if needed
+            try:
+                message_str = decrypted_message.decode('utf-8')
+            except UnicodeDecodeError:
+                # If it can't be decoded as UTF-8, return as bytes
+                message_str = decrypted_message
+            
+            return TranslateFromC2FormatMessageResponse(
+                success=True,
+                message=message_str
+            )
+            
+        except Exception as e:
+            return TranslateFromC2FormatMessageResponse(
+                success=False,
+                error=f"Failed to decrypt message: {str(e)}"
+            )
