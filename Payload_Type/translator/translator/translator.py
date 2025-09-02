@@ -4,192 +4,168 @@ import os
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.primitives import hashes, hmac, padding
 from cryptography.hazmat.backends import default_backend
+
 from mythic_container.TranslationBase import *
-import logging
 
-# Configure logging for debugging
-logging.basicConfig(
-    level=logging.DEBUG,
-    format='%(asctime)s [%(levelname)s] %(message)s',
-    handlers=[logging.StreamHandler()]
-)
-logger = logging.getLogger(__name__)
 
-class MyPythonTranslation(TranslationContainer):
+class myPythonTranslation(TranslationContainer):
     name = "myPythonTranslation"
-    description = "Python translation service with secure key generation and AES-CBC encryption with HMAC"
+    description = "Python translation service with AES encryption support"
     author = "@med"
-
-    def __init__(self):
-        super().__init__()
-        # Dictionary to store agent keys for each UUID
-        self.agent_keys = {}
-        logger.debug("Initialized MyPythonTranslation container")
 
     async def generate_keys(self, inputMsg: TrGenerateEncryptionKeysMessage) -> TrGenerateEncryptionKeysMessageResponse:
         response = TrGenerateEncryptionKeysMessageResponse(Success=True)
         try:
-            # Log the input message structure for debugging
-            msg_attrs = vars(inputMsg)
-            logger.debug(f"Input message structure: {msg_attrs}")
-
-            # Use UUID instead of PayloadUUID
-            payload_uuid = getattr(inputMsg, 'UUID', None)
-            if not payload_uuid:
-                raise AttributeError("No UUID attribute found in TrGenerateEncryptionKeysMessage")
-            logger.debug(f"Generating keys for UUID: {payload_uuid}")
-
-            # Generate 32-byte keys for AES-256
-            agent_to_server_key = os.urandom(32)  # Agent encrypts with this
-            server_to_agent_key = os.urandom(32)  # Agent decrypts with this
-
-            # Store keys for this payload UUID
-            self.agent_keys[payload_uuid] = {
-                'agent_to_server': agent_to_server_key,
-                'server_to_agent': server_to_agent_key
-            }
-
-            # Return base64-encoded keys for Mythic
-            response.EncryptionKey = base64.b64encode(server_to_agent_key)
-            response.DecryptionKey = base64.b64encode(agent_to_server_key)
-            logger.info(f"Generated keys for UUID {payload_uuid}: enc_key={response.EncryptionKey[:10].decode()}..., dec_key={response.DecryptionKey[:10].decode()}...")
-        except AttributeError as e:
-            response.Success = False
-            response.Error = f"Invalid input message structure: {str(e)}"
-            logger.error(f"Key generation failed: {str(e)}")
+            # Generate 32-byte (256-bit) keys for AES encryption
+            agent_to_server_key = os.urandom(32)
+            server_to_agent_key = os.urandom(32)
+            
+            # Base64 encode for transmission
+            response.EncryptionKey = base64.b64encode(agent_to_server_key)
+            response.DecryptionKey = base64.b64encode(server_to_agent_key)
+            
+            return response
         except Exception as e:
             response.Success = False
             response.Error = f"Key generation failed: {str(e)}"
-            logger.error(f"Key generation failed: {str(e)}")
-        return response
+            return response
 
     async def translate_to_c2_format(self, inputMsg: TrMythicC2ToCustomMessageFormatMessage) -> TrMythicC2ToCustomMessageFormatMessageResponse:
-        """
-        Mythic -> Agent: Encrypts JSON message from Mythic for agent
-        """
         response = TrMythicC2ToCustomMessageFormatMessageResponse(Success=True)
         try:
-            # Serialize Mythic's JSON message
-            plaintext = json.dumps(inputMsg.Message).encode()
-            payload_uuid = getattr(inputMsg, 'UUID', None) or getattr(inputMsg, 'PayloadUUID', None)
-            if not payload_uuid:
-                raise AttributeError("No UUID or PayloadUUID found in TrMythicC2ToCustomMessageFormatMessage")
-            logger.debug(f"Translating to C2 format for UUID {payload_uuid}")
+            # Convert Mythic message to JSON
+            json_message = json.dumps(inputMsg.Message)
+            
+            # Handle key exchange response (send unencrypted)
+            if inputMsg.Message.get("action") == "key_exchange_response":
+                # Key exchange response should be unencrypted base64
+                response.Message = base64.b64encode(json_message.encode())
+                return response
+            
+            # Normal encrypted communication
+            if inputMsg.CryptoKeys and len(inputMsg.CryptoKeys) > 0:
+                # Use the server-to-agent key for encryption
+                encryption_key = base64.b64decode(inputMsg.CryptoKeys[0])
+                encrypted_data = self._encrypt_data(json_message.encode(), encryption_key)
+                
+                # Prepend the callback UUID and base64 encode the result
+                callback_uuid = inputMsg.Message.get("uuid", "").encode()
+                final_message = base64.b64encode(callback_uuid + encrypted_data)
+            else:
+                # No encryption, just base64 encode
+                final_message = base64.b64encode(json_message.encode())
+            
+            response.Message = final_message
+            return response
+        except Exception as e:
+            response.Success = False
+            response.Error = f"Translation to C2 format failed: {str(e)}"
+            return response
 
-            # Get encryption key
-            key = base64.b64decode(inputMsg.EncryptionKey)
+    async def translate_from_c2_format(self, inputMsg: TrCustomMessageToMythicC2FormatMessage) -> TrCustomMessageToMythicC2FormatMessageResponse:
+        response = TrCustomMessageToMythicC2FormatMessageResponse(Success=True)
+        try:
+            # Decode base64 message from agent
+            decoded_message = base64.b64decode(inputMsg.Message)
+            
+            # Handle key exchange request (unencrypted)
+            try:
+                # Try to parse as JSON first (key exchange is unencrypted)
+                json_str = decoded_message.decode()
+                # Remove UUID prefix if present
+                if len(json_str) > 36:
+                    json_str = json_str[36:]  # Remove UUID
+                parsed_message = json.loads(json_str)
+                
+                # Check if this is a key exchange request
+                if parsed_message.get("action") == "key_exchange":
+                    response.Message = parsed_message
+                    return response
+            except:
+                pass  # Not a key exchange, continue with encrypted flow
+            
+            # Extract UUID and encrypted data for normal messages
+            if len(decoded_message) < 36:
+                raise ValueError("Message too short to contain UUID")
+            
+            # Find UUID boundary - look for standard UUID format
+            uuid_bytes = decoded_message[:36]
+            encrypted_data = decoded_message[36:]
+            
+            if inputMsg.CryptoKeys and len(inputMsg.CryptoKeys) > 0:
+                # Use the agent-to-server key for decryption
+                decryption_key = base64.b64decode(inputMsg.CryptoKeys[0])
+                decrypted_data = self._decrypt_data(encrypted_data, decryption_key)
+                if not decrypted_data:
+                    raise ValueError("Decryption failed")
+                json_message = decrypted_data.decode()
+            else:
+                # No encryption, just decode
+                json_message = encrypted_data.decode()
+            
+            # Parse JSON and return to Mythic
+            response.Message = json.loads(json_message)
+            return response
+        except Exception as e:
+            response.Success = False
+            response.Error = f"Translation from C2 format failed: {str(e)}"
+            return response
+
+    def _encrypt_data(self, data: bytes, key: bytes) -> bytes:
+        """Encrypt data using AES-256-CBC with HMAC authentication"""
+        try:
             iv = os.urandom(16)
-
-            # Encrypt with AES-CBC
             backend = default_backend()
+            
+            # Encrypt with AES-CBC
             cipher = Cipher(algorithms.AES(key), modes.CBC(iv), backend)
             encryptor = cipher.encryptor()
+            
+            # Add PKCS7 padding
             padder = padding.PKCS7(128).padder()
-            padded_data = padder.update(plaintext) + padder.finalize()
+            padded_data = padder.update(data) + padder.finalize()
+            
+            # Encrypt
             ciphertext = encryptor.update(padded_data) + encryptor.finalize()
-
-            # Compute HMAC
+            
+            # Generate HMAC
             h = hmac.HMAC(key, hashes.SHA256(), backend)
             h.update(iv + ciphertext)
             tag = h.finalize()
-
-            # Format: UUID + IV + Ciphertext + HMAC, then base64 encode
-            uuid = payload_uuid.encode()
-            encrypted_message = uuid + iv + ciphertext + tag
-            response.Message = base64.b64encode(encrypted_message)
-            logger.debug(f"Encrypted message for UUID {payload_uuid}, length={len(response.Message)}")
+            
+            return iv + ciphertext + tag
         except Exception as e:
-            response.Success = False
-            response.Error = f"Encryption failed: {str(e)}"
-            logger.error(f"Encryption failed for UUID {payload_uuid if 'payload_uuid' in locals() else 'unknown'}: {str(e)}")
-        return response
+            raise ValueError(f"Encryption failed: {str(e)}")
 
-    async def translate_from_c2_format(self, inputMsg: TrCustomMessageToMythicC2FormatMessage) -> TrCustomMessageToMythicC2FormatMessageResponse:
-        """
-        Agent -> Mythic: Decrypts agent's message and returns JSON to Mythic
-        """
-        response = TrCustomMessageToMythicC2FormatMessageResponse(Success=True)
+    def _decrypt_data(self, data: bytes, key: bytes) -> bytes:
+        """Decrypt data using AES-256-CBC with HMAC verification"""
         try:
-            # Handle key exchange or encrypted message
-            data = inputMsg.Message
-            if isinstance(data, bytes):
-                data = data.decode('utf-8')
-            logger.debug(f"Processing message from agent, data length={len(data)}")
-
-            # Check for key exchange
-            try:
-                decoded_data = base64.b64decode(data)
-                json_data = decoded_data.decode('utf-8')
-                parsed = json.loads(json_data)
-
-                if parsed.get('action') == 'key_exchange':
-                    uuid = parsed.get('uuid')
-                    logger.info(f"Key exchange request for UUID: {uuid}")
-
-                    # Generate or retrieve keys
-                    if uuid not in self.agent_keys:
-                        self.agent_keys[uuid] = {
-                            'agent_to_server': os.urandom(32),
-                            'server_to_agent': os.urandom(32)
-                        }
-                        logger.info(f"Generated new keys for UUID {uuid}")
-                    else:
-                        logger.debug(f"Using existing keys for UUID {uuid}")
-
-                    agent_keys = self.agent_keys[uuid]
-                    key_response = {
-                        "action": "key_exchange_response",
-                        "uuid": uuid,
-                        "encryption_key": base64.b64encode(agent_keys['agent_to_server']).decode(),
-                        "decryption_key": base64.b64encode(agent_keys['server_to_agent']).decode(),
-                        "status": "success"
-                    }
-                    response.Message = key_response
-                    logger.info(f"Key exchange response sent: {key_response}")
-                    return response
-            except (base64.binascii.Error, UnicodeDecodeError, json.JSONDecodeError):
-                # Not a key exchange, proceed with decryption
-                logger.debug("Message is not a key exchange, attempting decryption")
-
-            # Handle encrypted message
-            encrypted_data = base64.b64decode(data)
-            if len(encrypted_data) < 84:  # UUID(36) + IV(16) + Ciphertext(min 16) + HMAC(32)
-                response.Success = False
-                response.Error = "Message too short for encrypted format"
-                logger.error(f"Message too short: {len(encrypted_data)} bytes")
-                return response
-
-            # Extract components
-            uuid = encrypted_data[:36].decode()
-            iv = encrypted_data[36:52]
-            ciphertext = encrypted_data[52:-32]
-            received_tag = encrypted_data[-32:]
-
-            # Verify HMAC
-            key = base64.b64decode(inputMsg.DecryptionKey)
+            if len(data) < 52:  # 16 (IV) + 16 (min ciphertext) + 32 (HMAC)
+                raise ValueError("Data too short for decryption")
+            
+            iv = data[:16]
+            ciphertext = data[16:-32]
+            received_tag = data[-32:]
+            
             backend = default_backend()
+            
+            # Verify HMAC
             h = hmac.HMAC(key, hashes.SHA256(), backend)
             h.update(iv + ciphertext)
             calculated_tag = h.finalize()
-
+            
             if not hmac.compare_digest(calculated_tag, received_tag):
-                response.Success = False
-                response.Error = "HMAC verification failed"
-                logger.error(f"HMAC verification failed for UUID {uuid}")
-                return response
-
+                raise ValueError("HMAC verification failed")
+            
             # Decrypt
             cipher = Cipher(algorithms.AES(key), modes.CBC(iv), backend)
             decryptor = cipher.decryptor()
             padded_plaintext = decryptor.update(ciphertext) + decryptor.finalize()
+            
+            # Remove padding
             unpadder = padding.PKCS7(128).unpadder()
             plaintext = unpadder.update(padded_plaintext) + unpadder.finalize()
-
-            # Parse JSON
-            response.Message = json.loads(plaintext.decode())
-            logger.debug(f"Decrypted message from UUID {uuid}, plaintext length={len(plaintext)}")
+            
+            return plaintext
         except Exception as e:
-            response.Success = False
-            response.Error = f"Decryption failed: {str(e)}"
-            logger.error(f"Decryption failed: {str(e)}")
-        return response
+            raise ValueError(f"Decryption failed: {str(e)}")
