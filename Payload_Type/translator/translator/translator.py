@@ -1,192 +1,180 @@
-from mythic_container.TranslationBase import *
-import json
-import base64
-from Crypto.Cipher import AES
-from Crypto.Random import get_random_bytes
-from Crypto.Util.Padding import pad, unpad
-import hashlib
+import os
+import logging
+from mythic_container.TranslationBase import (
+    TranslationContainer,
+    TranslateGenerateKeysMessage,
+    TranslateGenerateKeysMessageResponse,
+    TranslateToC2FormatMessage,
+    TranslateToC2FormatMessageResponse,
+    TranslateFromC2FormatMessage,
+    TranslateFromC2FormatMessageResponse,
+)
+from cryptography.hazmat.primitives import hashes, hmac
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+from cryptography.hazmat.backends import default_backend
+
+logging.basicConfig(level=logging.DEBUG)
 
 class myPythonTranslation(TranslationContainer):
     name = "myPythonTranslation"
     description = "Igider translation service with custom encryption"
     author = "@med"
-    
-    # Store keys per agent UUID
-    agent_keys = {}
-    
+
     async def generate_keys(
+        self,
         request: TranslateGenerateKeysMessage
     ) -> TranslateGenerateKeysMessageResponse:
         """
         Generate encryption keys for the payload
-        
-        Args:
-            request: TranslateGenerateKeysMessage containing payload UUID and other info
-            
-        Returns:
-            TranslateGenerateKeysMessageResponse with generated keys as byte arrays
         """
         try:
-            # Generate a 32-byte AES-256 key
-            encryption_key = os.urandom(32)
-            
-            # Generate a 32-byte HMAC key for message integrity
-            hmac_key = os.urandom(32)
-            
-            # You can also generate other keys based on your encryption scheme
-            # For example, IV for AES if needed
-            iv = os.urandom(16)
-            
-            # Combine keys if needed (this is just an example)
-            # In practice, you might want to keep them separate
+            # Generate keys
+            encryption_key = os.urandom(32)  # 32 bytes for AES-256
+            hmac_key = os.urandom(32)        # 32 bytes for HMAC
+            iv = os.urandom(16)              # 16 bytes IV for AES CBC
+
             combined_key = encryption_key + hmac_key + iv
-            
-            # Return the keys as byte arrays (Mythic 3.0+ expects byte arrays, not base64)
+
+            logging.debug(f"Generated Encryption Key: {encryption_key.hex()}")
+            logging.debug(f"Generated HMAC Key: {hmac_key.hex()}")
+            logging.debug(f"Generated IV: {iv.hex()}")
+
             response = TranslateGenerateKeysMessageResponse(
                 success=True,
-                enc_key=encryption_key,  # Encryption key as bytes
-                dec_key=encryption_key,  # Decryption key (same as enc for symmetric)
-                # You can add additional keys to the 'value' field if needed
-                value=combined_key.hex()  # Optional: additional key data as hex string
+                enc_key=combined_key,  # Pass combined key bytes (encryption + hmac + iv)
+                dec_key=combined_key,  # Same for decryption in symmetric encryption
+                value=combined_key.hex()  # Optional hex string for debugging/logging
             )
-            
             return response
-            
+
         except Exception as e:
+            logging.error(f"Key generation failed: {str(e)}")
             return TranslateGenerateKeysMessageResponse(
                 success=False,
                 error=f"Failed to generate keys: {str(e)}"
             )
 
-
     async def translate_to_c2_format(
+        self,
         request: TranslateToC2FormatMessage
     ) -> TranslateToC2FormatMessageResponse:
         """
-        Translate message from Mythic format to C2 format (encrypt outgoing messages)
-        
-        Args:
-            request: TranslateToC2FormatMessage with message to encrypt
-            
-        Returns:
-            TranslateToC2FormatMessageResponse with encrypted message
+        Encrypt outgoing message (Mythic -> C2)
         """
         try:
-            # Get the message and encryption key
             message = request.message
-            enc_key = request.enc_key[:32]  # Use first 32 bytes for AES-256
-            hmac_key = request.enc_key[32:64]  # Next 32 bytes for HMAC
-            
-            # Convert message to bytes if it's a string
+            key_material = request.enc_key
+            if len(key_material) < 80:
+                raise ValueError("Invalid key length, expected at least 80 bytes")
+
+            # Split keys and IV
+            enc_key = key_material[:32]
+            hmac_key = key_material[32:64]
+            iv = key_material[64:80]
+
+            logging.debug(f"translate_to_c2_format: Using Encryption Key: {enc_key.hex()}")
+            logging.debug(f"translate_to_c2_format: Using HMAC Key: {hmac_key.hex()}")
+            logging.debug(f"translate_to_c2_format: Using IV: {iv.hex()}")
+
+            # Ensure message is bytes
             if isinstance(message, str):
                 message_bytes = message.encode('utf-8')
             else:
                 message_bytes = message
-            
-            # Generate a random IV for this message
-            iv = os.urandom(16)
-            
-            # Encrypt the message using AES-256-CBC
+
+            # PKCS7 Padding
+            padding_len = 16 - (len(message_bytes) % 16)
+            padded_message = message_bytes + bytes([padding_len] * padding_len)
+
+            # AES-256-CBC encryption
             cipher = Cipher(
-                algorithms.AES(enc_key), 
-                modes.CBC(iv), 
+                algorithms.AES(enc_key),
+                modes.CBC(iv),
                 backend=default_backend()
             )
             encryptor = cipher.encryptor()
-            
-            # Pad the message to AES block size (16 bytes)
-            padding_length = 16 - (len(message_bytes) % 16)
-            padded_message = message_bytes + bytes([padding_length]) * padding_length
-            
-            # Encrypt the padded message
-            encrypted_message = encryptor.update(padded_message) + encryptor.finalize()
-            
-            # Create HMAC for integrity checking
+            encrypted = encryptor.update(padded_message) + encryptor.finalize()
+
+            # HMAC for integrity
             h = hmac.HMAC(hmac_key, hashes.SHA256(), backend=default_backend())
-            h.update(iv + encrypted_message)
+            h.update(iv + encrypted)
             message_hmac = h.finalize()
-            
+
             # Combine IV + encrypted message + HMAC
-            final_message = iv + encrypted_message + message_hmac
-            
+            final_message = iv + encrypted + message_hmac
+
             return TranslateToC2FormatMessageResponse(
                 success=True,
                 message=final_message
             )
-            
+
         except Exception as e:
+            logging.error(f"Encryption failed: {str(e)}")
             return TranslateToC2FormatMessageResponse(
                 success=False,
                 error=f"Failed to encrypt message: {str(e)}"
             )
 
-
     async def translate_from_c2_format(
+        self,
         request: TranslateFromC2FormatMessage
     ) -> TranslateFromC2FormatMessageResponse:
         """
-        Translate message from C2 format to Mythic format (decrypt incoming messages)
-        
-        Args:
-            request: TranslateFromC2FormatMessage with encrypted message
-            
-        Returns:
-            TranslateFromC2FormatMessageResponse with decrypted message
+        Decrypt incoming message (C2 -> Mythic)
         """
         try:
-            # Get the encrypted message and decryption key
             encrypted_message = request.message
-            dec_key = request.dec_key[:32]  # Use first 32 bytes for AES-256
-            hmac_key = request.dec_key[32:64]  # Next 32 bytes for HMAC
-            
-            # Extract IV (first 16 bytes)
+            key_material = request.dec_key
+
+            if len(key_material) < 80:
+                raise ValueError("Invalid key length, expected at least 80 bytes")
+            if len(encrypted_message) < 80:
+                raise ValueError("Invalid encrypted message length")
+
+            # Split keys and IV
+            dec_key = key_material[:32]
+            hmac_key = key_material[32:64]
             iv = encrypted_message[:16]
-            
-            # Extract HMAC (last 32 bytes)
             received_hmac = encrypted_message[-32:]
-            
-            # Extract encrypted data (middle portion)
             encrypted_data = encrypted_message[16:-32]
-            
-            # Verify HMAC for integrity
+
+            logging.debug(f"translate_from_c2_format: Using Decryption Key: {dec_key.hex()}")
+            logging.debug(f"translate_from_c2_format: Using HMAC Key: {hmac_key.hex()}")
+            logging.debug(f"translate_from_c2_format: Using IV: {iv.hex()}")
+
+            # Verify HMAC
             h = hmac.HMAC(hmac_key, hashes.SHA256(), backend=default_backend())
             h.update(iv + encrypted_data)
-            try:
-                h.verify(received_hmac)
-            except Exception:
-                return TranslateFromC2FormatMessageResponse(
-                    success=False,
-                    error="HMAC verification failed - message may be corrupted or tampered with"
-                )
-            
-            # Decrypt the message using AES-256-CBC
+            h.verify(received_hmac)
+
+            # Decrypt AES-256-CBC
             cipher = Cipher(
-                algorithms.AES(dec_key), 
-                modes.CBC(iv), 
+                algorithms.AES(dec_key),
+                modes.CBC(iv),
                 backend=default_backend()
             )
             decryptor = cipher.decryptor()
-            
-            # Decrypt and remove padding
             decrypted_padded = decryptor.update(encrypted_data) + decryptor.finalize()
-            
+
             # Remove PKCS7 padding
-            padding_length = decrypted_padded[-1]
-            decrypted_message = decrypted_padded[:-padding_length]
-            
-            # Convert back to string if needed
+            padding_len = decrypted_padded[-1]
+            if padding_len < 1 or padding_len > 16:
+                raise ValueError("Invalid padding length detected")
+            decrypted = decrypted_padded[:-padding_len]
+
+            # Attempt UTF-8 decode
             try:
-                message_str = decrypted_message.decode('utf-8')
+                message_str = decrypted.decode('utf-8')
             except UnicodeDecodeError:
-                # If it can't be decoded as UTF-8, return as bytes
-                message_str = decrypted_message
-            
+                message_str = decrypted  # Raw bytes fallback
+
             return TranslateFromC2FormatMessageResponse(
                 success=True,
                 message=message_str
             )
-            
+
         except Exception as e:
+            logging.error(f"Decryption failed: {str(e)}")
             return TranslateFromC2FormatMessageResponse(
                 success=False,
                 error=f"Failed to decrypt message: {str(e)}"
