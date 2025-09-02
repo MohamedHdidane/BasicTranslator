@@ -7,7 +7,7 @@ from Crypto.Util.Padding import pad, unpad
 import hashlib
 
 class myPythonTranslation(TranslationContainer):
-    name = "igider_translator"
+    name = "myPythonTranslation"
     description = "Igider translation service with custom encryption"
     author = "@med"
     
