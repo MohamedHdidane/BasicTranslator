@@ -17,7 +17,7 @@ class MyTranslator(TranslationContainer):
         response = TrGenerateEncryptionKeysMessageResponse(Success=True)
 
         try:
-            key = os.urandom(16)  # FIXED: AES-256 requires 32 bytes, not 16
+            key = os.urandom(32)  # AES-256 requires 32 bytes
             b64_key = base64.b64encode(key)
 
             # Mythic will store these and embed into agent at build time
@@ -80,14 +80,14 @@ class MyTranslator(TranslationContainer):
         response = TrCustomMessageToMythicC2FormatMessageResponse(Success=True)
 
         try:
-            # --- 1. Get decryption key from TranslationContext ---
-            b64_key = inputMsg.TranslationContext.get("DecryptionKey", b"")
-            if not b64_key:
-                raise ValueError("DecryptionKey not found in TranslationContext")
+            # --- 1. Get decryption key from direct attribute ---
+            b64_key = inputMsg.dec_key  # Base64-encoded key provided by Mythic
+            if b64_key is None:
+                raise ValueError("dec_key is None; no decryption key available")
             key = base64.b64decode(b64_key)
 
             # --- 2. Parse message structure from agent ---
-            data = inputMsg.Message
+            data = inputMsg.Message  # Assumes raw bytes; if base64 per docs, add base64.b64decode(inputMsg.Message)
             uuid = data[:36]  # Agent prepends UUID (36 bytes for UUID string)
             iv = data[36:52]  # 16 bytes for IV
             ct = data[52:-32]  # Ciphertext (all but last 32 bytes)
