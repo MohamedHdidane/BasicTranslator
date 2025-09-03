@@ -114,9 +114,17 @@ class MyTranslator(TranslationContainer):
             # --- 6. Parse JSON ---
             response.Message = json.loads(decrypted.decode())
 
+            crypto_key_obj = inputMsg.CryptoKeys[0]
+            possible_key_attrs = ['DecryptionKey', 'dec_key', 'key', 'value', 'EncryptionKey']
+            b64 = ""
+            for attr in possible_key_attrs:
+                if hasattr(crypto_key_obj, attr):
+                    b64+= attr
+                    break
+
         except AttributeError as ae:
             response.Success = False
-            response.Error = f"AttributeError: {str(ae)}. Available attributes: {str(dir(inputMsg))}. Object format: {str(type(inputMsg))} . inputMsg.CryptoKeys: {str(type(inputMsg.CryptoKeys[0]))}. inputMsg.CryptoKeys: {str(type(inputMsg.CryptoKeys[1]))}"
+            response.Error = f"AttributeError: {str(ae)}. Available attributes: {str(dir(inputMsg))}. Object format: {str(type(inputMsg))} . inputMsg.CryptoKeys: {str(type(inputMsg.CryptoKeys[0]))}. inputMsg.CryptoKeys: {str(b64)}"
 
         except Exception as e:
             response.Success = False
