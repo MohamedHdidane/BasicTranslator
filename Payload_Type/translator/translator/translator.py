@@ -124,7 +124,7 @@ class MyTranslator(TranslationContainer):
 
         except AttributeError as ae:
             response.Success = False
-            response.Error = f"AttributeError: {str(ae)}. Available attributes: {str(dir(inputMsg))}. Object format: {str(type(inputMsg))} . inputMsg.CryptoKeys: {str(type(inputMsg.CryptoKeys[0]))}. inputMsg.CryptoKeys: {vars(inputMsg.CryptoKeys[0])}"
+            response.Error = f"AttributeError: {str(ae)}. Available attributes: {str(dir(inputMsg))}. Object format: {str(type(inputMsg))} . inputMsg.CryptoKeys: {str(type(inputMsg.CryptoKeys[0]))}. inputMsg.CryptoKeys: {vars(inputMsg.CryptoKeys[0])}**{inputMsg.CryptoKeys[0]['EncKey']}"
 
         except Exception as e:
             response.Success = False
