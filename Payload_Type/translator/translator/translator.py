@@ -86,7 +86,7 @@ class MyTranslator(TranslationContainer):
 
         try:
             # --- 1. Get decryption key from direct attribute (try 'enc_key' as it may be used for symmetric crypto) ---
-            b64_key = inputMsg.enc_key  # Change to inputMsg.dec_key if this fails; or use the debug output to find the correct field name
+            b64_key = inputMsg.CryptoKeys[0].EncKey  # Change to inputMsg.dec_key if this fails; or use the debug output to find the correct field name
             if not b64_key:
                 raise ValueError("enc_key not found or empty")
             key = base64.b64decode(b64_key)
