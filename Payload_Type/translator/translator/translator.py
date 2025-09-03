@@ -79,8 +79,8 @@ class MyTranslator(TranslationContainer):
         self, inputMsg: TrCustomMessageToMythicC2FormatMessage
     ) -> TrCustomMessageToMythicC2FormatMessageResponse:
         # Debug: Print attributes of inputMsg to logs to identify available fields (check docker logs for your translation container)
-        print(dir(inputMsg))
-        print(vars(inputMsg))  # For more details on field values (if available)
+        print("Attributes of inputMsg: " + str(dir(inputMsg)))
+        print("Vars of inputMsg: " + str(vars(inputMsg)))  # For more details on field values (if available)
 
         response = TrCustomMessageToMythicC2FormatMessageResponse(Success=True)
 
@@ -88,7 +88,7 @@ class MyTranslator(TranslationContainer):
             # --- 1. Get decryption key from direct attribute (try 'enc_key' as it may be used for symmetric crypto) ---
             b64_key = inputMsg.enc_key  # Change to inputMsg.dec_key if this fails; or use the debug output to find the correct field name
             if not b64_key:
-                raise ValueValue("enc_key not found or empty")
+                raise ValueError("enc_key not found or empty")
             key = base64.b64decode(b64_key)
 
             # --- 2. Parse message structure from agent (Mythic has already removed UUID) ---
@@ -113,6 +113,10 @@ class MyTranslator(TranslationContainer):
 
             # --- 6. Parse JSON ---
             response.Message = json.loads(decrypted.decode())
+
+        except AttributeError as ae:
+            response.Success = False
+            response.Error = f"AttributeError: {str(ae)}. Available attributes: {str(dir(inputMsg))}. Object format: {str(type(inputMsg))}"
 
         except Exception as e:
             response.Success = False
