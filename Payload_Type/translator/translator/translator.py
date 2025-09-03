@@ -32,8 +32,7 @@ class MyTranslator(TranslationContainer):
     ) -> TrMythicC2ToCustomMessageFormatMessageResponse:
         response = TrMythicC2ToCustomMessageFormatMessageResponse(Success=True)
 
-        key = base64.b64decode(inputMsg.EncryptionKey)
-        iv = os.urandom(16)
+        key = base64.b64decode(inputMsg.TranslationInfo.DecryptionKey)        iv = os.urandom(16)
 
         cipher = Cipher(algorithms.AES(key), modes.CBC(iv), backend=default_backend())
         encryptor = cipher.encryptor()
@@ -55,8 +54,7 @@ class MyTranslator(TranslationContainer):
     ) -> TrCustomMessageToMythicC2FormatMessageResponse:
         response = TrCustomMessageToMythicC2FormatMessageResponse(Success=True)
 
-        key = base64.b64decode(inputMsg.DecryptionKey)
-        data = inputMsg.Message
+        key = base64.b64decode(inputMsg.TranslationInfo.DecryptionKey)        data = inputMsg.Message
 
         uuid = data[:36]         # agent prepends UUID
         iv = data[36:52]
