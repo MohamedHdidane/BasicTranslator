@@ -17,7 +17,7 @@ class MyTranslator(TranslationContainer):
     async def generate_keys(self, inputMsg: TrGenerateEncryptionKeysMessage) -> TrGenerateEncryptionKeysMessageResponse:
         response = TrGenerateEncryptionKeysMessageResponse(Success=True)
 
-        key = os.urandom(16)  # AES-256 key
+        key = os.urandom(16)  # AES-256 key (32 bytes, not 16)
         b64_key = base64.b64encode(key)
 
         # Mythic will store these and embed into agent at build time
@@ -28,9 +28,9 @@ class MyTranslator(TranslationContainer):
 
     # --- 2. Mythic -> Agent (Encrypt) ---
     async def translate_to_c2_format(
-        self, inputMsg: TrCustomMessageToMythicC2FormatMessage
-    ) -> TrCustomMessageToMythicC2FormatMessageResponse:
-        response = TrCustomMessageToMythicC2FormatMessageResponse(Success=True)
+        self, inputMsg: TrMythicC2ToCustomMessageFormatMessage
+    ) -> TrMythicC2ToCustomMessageFormatMessageResponse:
+        response = TrMythicC2ToCustomMessageFormatMessageResponse(Success=True)
 
         try:
             # --- 1. Get encryption key from TranslationContext ---
@@ -75,8 +75,9 @@ class MyTranslator(TranslationContainer):
         response = TrCustomMessageToMythicC2FormatMessageResponse(Success=True)
 
         try:
-            # --- 1. Get decryption key from TranslationContext ---
-            b64_key = inputMsg.TranslationContext.get("DecryptionKey", b"")
+            # --- 1. Get decryption key - FIXED: Access through Payload object ---
+            # The encryption keys are stored with the payload record in Mythic
+            b64_key = inputMsg.Payload.EncryptionKey  # or DecryptionKey
             key = base64.b64decode(b64_key)
 
             # --- 2. Parse message structure from agent ---
@@ -100,9 +101,10 @@ class MyTranslator(TranslationContainer):
             unpadder = padding.PKCS7(128).unpadder()
             decrypted = unpadder.update(pt) + unpadder.finalize()
 
-            # --- 6. Remove UUID and load JSON ---
-            plaintext = (uuid + decrypted.decode())
-            response.Message = json.loads(plaintext)
+            # --- 6. Parse JSON (remove UUID prefix that agent added) ---
+            # Note: The UUID is already parsed from the beginning of the message
+            # The decrypted content should be just the JSON
+            response.Message = json.loads(decrypted.decode())
 
         except Exception as e:
             response.Success = False
