@@ -28,9 +28,9 @@ class MyTranslator(TranslationContainer):
 
     # --- 2. Mythic -> Agent (Encrypt) ---
     async def translate_to_c2_format(
-        self, inputMsg: TrCustomMessageToRemoteC2FormatMessage
-    ) -> TrCustomMessageToRemoteC2FormatMessageResponse:
-        response = TrCustomMessageToRemoteC2FormatMessageResponse(Success=True)
+        self, inputMsg: TrCustomMessageToMythicC2FormatMessage
+    ) -> TrCustomMessageToMythicC2FormatMessageResponse:
+        response = TrCustomMessageToMythicC2FormatMessageResponse(Success=True)
 
         try:
             # --- 1. Get encryption key from TranslationContext ---
