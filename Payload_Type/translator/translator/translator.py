@@ -28,25 +28,44 @@ class MyTranslator(TranslationContainer):
 
     # --- 2. Mythic -> Agent (Encrypt) ---
     async def translate_to_c2_format(
-        self, inputMsg: TrMythicC2ToCustomMessageFormatMessage
-    ) -> TrMythicC2ToCustomMessageFormatMessageResponse:
-        response = TrMythicC2ToCustomMessageFormatMessageResponse(Success=True)
+        self, inputMsg: TrCustomMessageToRemoteC2FormatMessage
+    ) -> TrCustomMessageToRemoteC2FormatMessageResponse:
+        response = TrCustomMessageToRemoteC2FormatMessageResponse(Success=True)
 
-        key = base64.b64decode(inputMsg.TranslationInfo.DecryptionKey)        
-        iv = os.urandom(16)
+        try:
+            # --- 1. Get encryption key from TranslationContext ---
+            b64_key = inputMsg.TranslationContext.get("EncryptionKey", b"")
+            key = base64.b64decode(b64_key)
 
-        cipher = Cipher(algorithms.AES(key), modes.CBC(iv), backend=default_backend())
-        encryptor = cipher.encryptor()
+            # --- 2. Prepare JSON data ---
+            # Mythic hands you a dict in inputMsg.Message
+            plaintext_json = json.dumps(inputMsg.Message).encode()
 
-        padder = padding.PKCS7(128).padder()
-        padded = padder.update(json.dumps(inputMsg.Message).encode()) + padder.finalize()
-        ct = encryptor.update(padded) + encryptor.finalize()
+            # --- 3. PKCS7 padding ---
+            padder = padding.PKCS7(128).padder()
+            padded = padder.update(plaintext_json) + padder.finalize()
 
-        h = hmac.HMAC(key, hashes.SHA256(), backend=default_backend())
-        h.update(iv + ct)
-        tag = h.finalize()
+            # --- 4. Generate IV and encrypt ---
+            iv = os.urandom(16)
+            cipher = Cipher(algorithms.AES(key), modes.CBC(iv), backend=default_backend())
+            encryptor = cipher.encryptor()
+            ciphertext = encryptor.update(padded) + encryptor.finalize()
 
-        response.Message = iv + ct + tag
+            # --- 5. Compute HMAC ---
+            h = hmac.HMAC(key, hashes.SHA256(), backend=default_backend())
+            h.update(iv + ciphertext)
+            tag = h.finalize()
+
+            # --- 6. Prepend UUID + assemble final payload ---
+            uuid = inputMsg.Payload.UUID.encode()
+            full_msg = uuid + iv + ciphertext + tag
+
+            response.Message = full_msg
+
+        except Exception as e:
+            response.Success = False
+            response.Error = str(e)
+
         return response
 
     # --- 3. Agent -> Mythic (Decrypt) ---
@@ -55,26 +74,38 @@ class MyTranslator(TranslationContainer):
     ) -> TrCustomMessageToMythicC2FormatMessageResponse:
         response = TrCustomMessageToMythicC2FormatMessageResponse(Success=True)
 
-        key = base64.b64decode(inputMsg.TranslationInfo.DecryptionKey)        
-        data = inputMsg.Message
+        try:
+            # --- 1. Get decryption key from TranslationContext ---
+            b64_key = inputMsg.TranslationContext.get("DecryptionKey", b"")
+            key = base64.b64decode(b64_key)
 
-        uuid = data[:36]         # agent prepends UUID
-        iv = data[36:52]
-        ct = data[52:-32]
-        received_tag = data[-32:]
+            # --- 2. Parse message structure from agent ---
+            data = inputMsg.Message
+            uuid = data[:36]          # Agent prepends UUID
+            iv = data[36:52]
+            ct = data[52:-32]
+            received_tag = data[-32:]
 
-        # verify HMAC
-        h = hmac.HMAC(key, hashes.SHA256(), backend=default_backend())
-        h.update(iv + ct)
-        h.verify(received_tag)
+            # --- 3. Verify HMAC ---
+            h = hmac.HMAC(key, hashes.SHA256(), backend=default_backend())
+            h.update(iv + ct)
+            h.verify(received_tag)  # raises exception if mismatch
 
-        cipher = Cipher(algorithms.AES(key), modes.CBC(iv), backend=default_backend())
-        decryptor = cipher.decryptor()
-        pt = decryptor.update(ct) + decryptor.finalize()
+            # --- 4. Decrypt AES-CBC ---
+            cipher = Cipher(algorithms.AES(key), modes.CBC(iv), backend=default_backend())
+            decryptor = cipher.decryptor()
+            pt = decryptor.update(ct) + decryptor.finalize()
 
-        unpadder = padding.PKCS7(128).unpadder()
-        decrypted = unpadder.update(pt) + unpadder.finalize()
+            # --- 5. Remove PKCS7 padding ---
+            unpadder = padding.PKCS7(128).unpadder()
+            decrypted = unpadder.update(pt) + unpadder.finalize()
 
-        # agent concatenates UUID + plaintext
-        response.Message = json.loads((uuid + decrypted.decode()))
+            # --- 6. Remove UUID and load JSON ---
+            plaintext = (uuid + decrypted.decode())
+            response.Message = json.loads(plaintext)
+
+        except Exception as e:
+            response.Success = False
+            response.Error = str(e)
+
         return response
