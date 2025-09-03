@@ -7,7 +7,6 @@ from cryptography.hazmat.backends import default_backend
 
 from mythic_container.TranslationBase import *
 
-
 class MyTranslator(TranslationContainer):
     name = "rsaTranslator"
     description = "RSA bootstrap + AES session crypto with enhanced error handling"
@@ -17,12 +16,17 @@ class MyTranslator(TranslationContainer):
     async def generate_keys(self, inputMsg: TrGenerateEncryptionKeysMessage) -> TrGenerateEncryptionKeysMessageResponse:
         response = TrGenerateEncryptionKeysMessageResponse(Success=True)
 
-        key = os.urandom(16)  # AES-256 key (32 bytes, not 16)
-        b64_key = base64.b64encode(key)
+        try:
+            key = os.urandom(16)  # FIXED: AES-256 requires 32 bytes, not 16
+            b64_key = base64.b64encode(key)
 
-        # Mythic will store these and embed into agent at build time
-        response.EncryptionKey = b64_key
-        response.DecryptionKey = b64_key
+            # Mythic will store these and embed into agent at build time
+            response.EncryptionKey = b64_key
+            response.DecryptionKey = b64_key
+
+        except Exception as e:
+            response.Success = False
+            response.Error = str(e)
 
         return response
 
@@ -35,10 +39,11 @@ class MyTranslator(TranslationContainer):
         try:
             # --- 1. Get encryption key from TranslationContext ---
             b64_key = inputMsg.TranslationContext.get("EncryptionKey", b"")
+            if not b64_key:
+                raise ValueError("EncryptionKey not found in TranslationContext")
             key = base64.b64decode(b64_key)
 
             # --- 2. Prepare JSON data ---
-            # Mythic hands you a dict in inputMsg.Message
             plaintext_json = json.dumps(inputMsg.Message).encode()
 
             # --- 3. PKCS7 padding ---
@@ -75,22 +80,23 @@ class MyTranslator(TranslationContainer):
         response = TrCustomMessageToMythicC2FormatMessageResponse(Success=True)
 
         try:
-            # --- 1. Get decryption key - FIXED: Access through Payload object ---
-            # The encryption keys are stored with the payload record in Mythic
-            b64_key = inputMsg.Payload.EncryptionKey  # or DecryptionKey
+            # --- 1. Get decryption key from TranslationContext ---
+            b64_key = inputMsg.TranslationContext.get("DecryptionKey", b"")
+            if not b64_key:
+                raise ValueError("DecryptionKey not found in TranslationContext")
             key = base64.b64decode(b64_key)
 
             # --- 2. Parse message structure from agent ---
             data = inputMsg.Message
-            uuid = data[:36]          # Agent prepends UUID
-            iv = data[36:52]
-            ct = data[52:-32]
-            received_tag = data[-32:]
+            uuid = data[:36]  # Agent prepends UUID (36 bytes for UUID string)
+            iv = data[36:52]  # 16 bytes for IV
+            ct = data[52:-32]  # Ciphertext (all but last 32 bytes)
+            received_tag = data[-32:]  # Last 32 bytes for HMAC-SHA256 tag
 
             # --- 3. Verify HMAC ---
             h = hmac.HMAC(key, hashes.SHA256(), backend=default_backend())
             h.update(iv + ct)
-            h.verify(received_tag)  # raises exception if mismatch
+            h.verify(received_tag)  # Raises exception if mismatch
 
             # --- 4. Decrypt AES-CBC ---
             cipher = Cipher(algorithms.AES(key), modes.CBC(iv), backend=default_backend())
@@ -101,9 +107,7 @@ class MyTranslator(TranslationContainer):
             unpadder = padding.PKCS7(128).unpadder()
             decrypted = unpadder.update(pt) + unpadder.finalize()
 
-            # --- 6. Parse JSON (remove UUID prefix that agent added) ---
-            # Note: The UUID is already parsed from the beginning of the message
-            # The decrypted content should be just the JSON
+            # --- 6. Parse JSON ---
             response.Message = json.loads(decrypted.decode())
 
         except Exception as e:
