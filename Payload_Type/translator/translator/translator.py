@@ -1,6 +1,7 @@
 import os
 import json
 import base64
+from mythic_container.MythicRPC import *
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.primitives import hashes, hmac, padding
 from cryptography.hazmat.backends import default_backend
