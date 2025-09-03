@@ -128,6 +128,6 @@ class MyTranslator(TranslationContainer):
 
         except Exception as e:
             response.Success = False
-            response.Error = str(e)
+            response.Error = f"{str(e)}**DecryptKEy:{inputMsg.CryptoKeys[0].DecKey}**h:{h}**recived_tag:{received_tag}**ct:{ct}**iv:{iv}"
 
         return response
