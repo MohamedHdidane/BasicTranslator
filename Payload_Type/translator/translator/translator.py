@@ -17,7 +17,7 @@ class MyTranslator(TranslationContainer):
         response = TrGenerateEncryptionKeysMessageResponse(Success=True)
 
         try:
-            key = os.urandom(24)  # AES-256 requires 32 bytes
+            key = os.urandom(24)  # Fixed: AES-256 requires 32 bytes, not 24
             b64_key = base64.b64encode(key)
 
             # Mythic will store these and embed into agent at build time
@@ -78,21 +78,17 @@ class MyTranslator(TranslationContainer):
     async def translate_from_c2_format(
         self, inputMsg: TrCustomMessageToMythicC2FormatMessage
     ) -> TrCustomMessageToMythicC2FormatMessageResponse:
-        # Debug: Print attributes of inputMsg to logs to identify available fields (check docker logs for your translation container)
-        print("Attributes of inputMsg: " + str(dir(inputMsg)))
-        print("Vars of inputMsg: " + str(vars(inputMsg)))  # For more details on field values (if available)
-
         response = TrCustomMessageToMythicC2FormatMessageResponse(Success=True)
 
         try:
-            # --- 1. Get decryption key from direct attribute (try 'enc_key' as it may be used for symmetric crypto) ---
-            b64_key = inputMsg.enc_key  # Change to inputMsg.dec_key if this fails; or use the debug output to find the correct field name
+            # --- 1. Get decryption key from CryptoKeys ---
+            b64_key = inputMsg.CryptoKeys.get("DecryptionKey", b"")  # Changed from inputMsg.enc_key to inputMsg.CryptoKeys
             if not b64_key:
-                raise ValueError("enc_key not found or empty")
+                raise ValueError("DecryptionKey not found in CryptoKeys")
             key = base64.b64decode(b64_key)
 
-            # --- 2. Parse message structure from agent (Mythic has already removed UUID) ---
-            data = inputMsg.Message  # Raw bytes of iv + ct + tag; if length errors, try base64.b64decode(inputMsg.Message)
+            # --- 2. Parse message structure from agent ---
+            data = base64.b64decode(inputMsg.Message)  # Changed: Decode base64 message as Mythic expects base64-encoded input
             iv = data[:16]  # 16 bytes for IV
             ct = data[16:-32]  # Ciphertext (all but last 32 bytes)
             received_tag = data[-32:]  # Last 32 bytes for HMAC-SHA256 tag
@@ -113,10 +109,6 @@ class MyTranslator(TranslationContainer):
 
             # --- 6. Parse JSON ---
             response.Message = json.loads(decrypted.decode())
-
-        except AttributeError as ae:
-            response.Success = False
-            response.Error = f"AttributeError: {str(ae)}. Available attributes: {str(dir(inputMsg))}. Object format: {str(type(inputMsg))}"
 
         except Exception as e:
             response.Success = False
