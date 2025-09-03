@@ -65,7 +65,8 @@ class MyTranslator(TranslationContainer):
             uuid = inputMsg.Payload.UUID.encode()
             full_msg = uuid + iv + ciphertext + tag
 
-            response.Message = full_msg
+            # Base64-encode the full message (Mythic expects this for custom crypto)
+            response.Message = base64.b64encode(full_msg)
 
         except Exception as e:
             response.Success = False
@@ -81,16 +82,15 @@ class MyTranslator(TranslationContainer):
 
         try:
             # --- 1. Get decryption key from direct attribute ---
-            b64_key = inputMsg.dec_key  # Base64-encoded key provided by Mythic
-            if b64_key is None:
-                raise ValueError("dec_key is None; no decryption key available")
+            b64_key = inputMsg.DecryptionKey  # Base64-encoded bytes provided by Mythic
+            if not b64_key:
+                raise ValueError("DecryptionKey not found or empty")
             key = base64.b64decode(b64_key)
 
-            # --- 2. Parse message structure from agent ---
-            data = inputMsg.Message  # Assumes raw bytes; if base64 per docs, add base64.b64decode(inputMsg.Message)
-            uuid = data[:36]  # Agent prepends UUID (36 bytes for UUID string)
-            iv = data[36:52]  # 16 bytes for IV
-            ct = data[52:-32]  # Ciphertext (all but last 32 bytes)
+            # --- 2. Parse message structure from agent (Mythic has already removed UUID) ---
+            data = inputMsg.Message  # Raw bytes of iv + ct + tag (if base64-encoded in some C2, decode here)
+            iv = data[:16]  # 16 bytes for IV
+            ct = data[16:-32]  # Ciphertext (all but last 32 bytes)
             received_tag = data[-32:]  # Last 32 bytes for HMAC-SHA256 tag
 
             # --- 3. Verify HMAC ---
