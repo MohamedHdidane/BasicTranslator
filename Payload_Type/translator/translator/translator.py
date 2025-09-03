@@ -17,8 +17,8 @@ class MyTranslator(TranslationContainer):
     async def generate_keys(self, inputMsg: TrGenerateEncryptionKeysMessage) -> TrGenerateEncryptionKeysMessageResponse:
         response = TrGenerateEncryptionKeysMessageResponse(Success=True)
 
-        key = os.urandom(32)  # AES-256 key
-        b64_key = base64.b64encode(key).decode()
+        key = os.urandom(16)  # AES-256 key
+        b64_key = base64.b64encode(key)
 
         # Mythic will store these and embed into agent at build time
         response.EncryptionKey = b64_key
