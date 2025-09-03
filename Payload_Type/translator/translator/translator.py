@@ -89,7 +89,7 @@ class MyTranslator(TranslationContainer):
             b64_key = inputMsg.CryptoKeys[0].DecKey  # Change to inputMsg.dec_key if this fails; or use the debug output to find the correct field name
             if not b64_key:
                 raise ValueError("enc_key not found or empty")
-            key = base64.b64decode(b64_key)
+            key = b64_key
 
             # --- 2. Parse message structure from agent (Mythic has already removed UUID) ---
             data = inputMsg.Message  # Raw bytes of iv + ct + tag; if length errors, try base64.b64decode(inputMsg.Message)
