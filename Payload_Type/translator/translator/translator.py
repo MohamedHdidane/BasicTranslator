@@ -79,39 +79,40 @@ class MyTranslator(TranslationContainer):
         self, inputMsg: TrCustomMessageToMythicC2FormatMessage
     ) -> TrCustomMessageToMythicC2FormatMessageResponse:
         response = TrCustomMessageToMythicC2FormatMessageResponse(Success=True)
-
         try:
-            # --- 1. Get decryption key from direct attribute ---
-            b64_key = inputMsg.DecryptionKey  # Base64-encoded bytes provided by Mythic
-            if not b64_key:
-                raise ValueError("DecryptionKey not found or empty")
-            key = base64.b64decode(b64_key)
+            # Method 1: Direct key access (if provided by Mythic)
+            if hasattr(inputMsg, 'dec_key') and inputMsg.dec_key:
+                key = base64.b64decode(inputMsg.dec_key)
+            else:
+                # Method 2: Fetch key via RPC (fallback)
+                key_response = await SendMythicRPCPayloadGetContent(MythicRPCPayloadGetContentMessage(
+                    PayloadUUID=inputMsg.PayloadUUID
+                ))
+                if not key_response.Success:
+                    raise ValueError("Failed to fetch decryption key via RPC")
+                key = base64.b64decode(key_response.DecryptionKey)  # Adjust attribute name as needed
 
-            # --- 2. Parse message structure from agent (Mythic has already removed UUID) ---
-            data = inputMsg.Message  # Raw bytes of iv + ct + tag (if base64-encoded in some C2, decode here)
-            iv = data[:16]  # 16 bytes for IV
-            ct = data[16:-32]  # Ciphertext (all but last 32 bytes)
-            received_tag = data[-32:]  # Last 32 bytes for HMAC-SHA256 tag
+            # Rest of decryption logic (same as before)
+            data = inputMsg.Message
+            uuid = data[:36]
+            iv = data[36:52]
+            ct = data[52:-32]
+            received_tag = data[-32:]
 
-            # --- 3. Verify HMAC ---
+            # Verify HMAC
             h = hmac.HMAC(key, hashes.SHA256(), backend=default_backend())
             h.update(iv + ct)
-            h.verify(received_tag)  # Raises exception if mismatch
+            h.verify(received_tag)
 
-            # --- 4. Decrypt AES-CBC ---
+            # Decrypt and unpad
             cipher = Cipher(algorithms.AES(key), modes.CBC(iv), backend=default_backend())
             decryptor = cipher.decryptor()
             pt = decryptor.update(ct) + decryptor.finalize()
-
-            # --- 5. Remove PKCS7 padding ---
             unpadder = padding.PKCS7(128).unpadder()
             decrypted = unpadder.update(pt) + unpadder.finalize()
-
-            # --- 6. Parse JSON ---
             response.Message = json.loads(decrypted.decode())
 
         except Exception as e:
             response.Success = False
             response.Error = str(e)
-
         return response
