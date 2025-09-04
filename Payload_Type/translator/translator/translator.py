@@ -17,11 +17,12 @@ class MyTranslator(TranslationContainer):
         response = TrGenerateEncryptionKeysMessageResponse(Success=True)
 
         try:
-            key = os.urandom(32)  # AES-256 requires 32 bytes
+            enc_key = os.urandom(32)  # AES-256 encryption key
+            dec_key = os.urandom(32)  # AES-256 decryption key
 
-            # Mythic will store these and embed into agent at build time
-            response.EncryptionKey = key
-            response.DecryptionKey = key
+            # Mythic will store them separately
+            response.EncryptionKey = enc_key
+            response.DecryptionKey = dec_key
 
         except Exception as e:
             response.Success = False
