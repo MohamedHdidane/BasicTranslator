@@ -38,7 +38,7 @@ class MyTranslator(TranslationContainer):
 
         try:
             # --- 1. Get encryption key from TranslationContext ---
-            b64_key = inputMsg.TranslationContext.get("EncryptionKey", b"")
+            b64_key = inputMsg.CryptoKeys[0].EncKey
             if not b64_key:
                 raise ValueError("EncryptionKey not found in TranslationContext")
             key = base64.b64decode(b64_key)
