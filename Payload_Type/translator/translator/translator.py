@@ -41,7 +41,7 @@ class MyTranslator(TranslationContainer):
             b64_key = inputMsg.CryptoKeys[0].EncKey
             if not b64_key:
                 raise ValueError("EncryptionKey not found in TranslationContext")
-            key = base64.b64decode(b64_key)
+            key = b64_key
 
             # --- 2. Prepare JSON data ---
             plaintext_json = json.dumps(inputMsg.Message).encode()
@@ -62,7 +62,7 @@ class MyTranslator(TranslationContainer):
             tag = h.finalize()
 
             # --- 6. Prepend UUID + assemble final payload ---
-            uuid = inputMsg.Payload.UUID.encode()
+            uuid = inputMsg.UUID.encode()
             full_msg = uuid + iv + ciphertext + tag
 
             # Base64-encode the full message (Mythic expects this for custom crypto)
