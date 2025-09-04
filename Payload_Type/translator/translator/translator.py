@@ -9,8 +9,8 @@ from mythic_container.TranslationBase import *
 
 class MyTranslator(TranslationContainer):
     name = "rsaTranslator"
-    description = "RSA bootstrap + AES session crypto with enhanced error handling"
-    author = "you"
+    description = "AES crypto"
+    author = "@med"
 
     # --- 1. Key Generation ---
     async def generate_keys(self, inputMsg: TrGenerateEncryptionKeysMessage) -> TrGenerateEncryptionKeysMessageResponse:
@@ -37,11 +37,8 @@ class MyTranslator(TranslationContainer):
 
         try:
             # --- 1. Get encryption key from TranslationContext ---
-            b64_key = inputMsg.CryptoKeys[0].EncKey
-            if not b64_key:
-                raise ValueError("EncryptionKey not found in TranslationContext")
-            key = b64_key
-
+            key = inputMsg.CryptoKeys[0].EncKey
+   
             # --- 2. Prepare JSON data ---
             plaintext_json = json.dumps(inputMsg.Message).encode()
 
@@ -77,18 +74,11 @@ class MyTranslator(TranslationContainer):
     async def translate_from_c2_format(
         self, inputMsg: TrCustomMessageToMythicC2FormatMessage
     ) -> TrCustomMessageToMythicC2FormatMessageResponse:
-        # Debug: Print attributes of inputMsg to logs to identify available fields (check docker logs for your translation container)
-        print("Attributes of inputMsg: " + str(dir(inputMsg)))
-        print("Vars of inputMsg: " + str(vars(inputMsg)))  # For more details on field values (if available)
-
+      
         response = TrCustomMessageToMythicC2FormatMessageResponse(Success=True)
 
         try:
-            # --- 1. Get decryption key from direct attribute (try 'enc_key' as it may be used for symmetric crypto) ---
-            b64_key = inputMsg.CryptoKeys[0].DecKey  # Change to inputMsg.dec_key if this fails; or use the debug output to find the correct field name
-            if not b64_key:
-                raise ValueError("enc_key not found or empty")
-            key = b64_key
+            key = inputMsg.CryptoKeys[0].DecKey  
 
             # --- 2. Parse message structure from agent (Mythic has already removed UUID) ---
             data = inputMsg.Message  # Raw bytes of iv + ct + tag; if length errors, try base64.b64decode(inputMsg.Message)
@@ -113,20 +103,13 @@ class MyTranslator(TranslationContainer):
             # --- 6. Parse JSON ---
             response.Message = json.loads(decrypted.decode())
 
-            crypto_key_obj = inputMsg.CryptoKeys[0]
-            possible_key_attrs = ['DecryptionKey', 'dec_key', 'key', 'value', 'EncryptionKey']
-            b64 = ""
-            for attr in possible_key_attrs:
-                if hasattr(crypto_key_obj, attr):
-                    b64+= attr
-                    break
-
+     
         except AttributeError as ae:
             response.Success = False
-            response.Error = f"AttributeError: {str(ae)}. Available attributes: {str(dir(inputMsg))}. Object format: {str(type(inputMsg))} . inputMsg.CryptoKeys: {str(type(inputMsg.CryptoKeys[0]))}. inputMsg.CryptoKeys: {vars(inputMsg.CryptoKeys[0])}**{inputMsg.CryptoKeys[0].EncKey}"
+            response.Error = f"AttributeError: {str(ae)}"
 
         except Exception as e:
             response.Success = False
-            response.Error = f"{str(e)}**DecryptKEy:{key}**h:{h}**recived_tag:{received_tag}**ct:{ct}**iv:{iv}"
+            response.Error = f"{str(e)}"
 
         return response
